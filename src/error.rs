@@ -1,14 +1,17 @@
 //! Crypto errors.
 use thiserror::Error;
 
-use serde::{Deserialize, Serialize};
-
 /// A crypto error.
-#[derive(Clone, Eq, PartialEq, Debug, Error, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Debug, Error)]
 pub enum Error {
     /// Not enough signature shares.
-    #[error("Not enough shares for interpolation")]
-    NotEnoughShares,
+    #[error("Not enough shares ({current}) for interpolation, needed: ({required})")]
+    NotEnoughShares {
+        /// Current number of signature shares
+        current: usize,
+        /// Required number of signature shares
+        required: usize,
+    },
     /// Samples for interpolation contain a duplicated index.
     #[error("Samples for interpolation contain a duplicated index")]
     DuplicateEntry,
@@ -21,6 +24,9 @@ pub enum Error {
     /// The result of Hash To Field is zero which should never happen.
     #[error("Hash To Field returned zero")]
     HashToFieldIsZero,
+    /// An error converting to or from a hex representation of a key.
+    #[error("Failed to convert the key from hex")]
+    HexConversionFailed(#[from] hex::FromHexError),
 }
 
 /// A crypto result.
@@ -35,6 +41,6 @@ mod tests {
 
     #[test]
     fn errors_are_send_and_sync() {
-        is_send_and_sync(Error::NotEnoughShares);
+        is_send_and_sync(Error::HashToFieldIsZero);
     }
 }

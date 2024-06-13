@@ -36,7 +36,7 @@ use rand_chacha::ChaChaRng;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
-use crate::cmp_pairing::cmp_projective;
+use crate::cmp_pairing::cmp_affine;
 use crate::convert::{derivation_index_into_fr, fr_from_bytes, g1_from_bytes, g2_from_bytes};
 pub use crate::error::{Error, Result};
 pub use crate::into_fr::IntoFr;
@@ -44,9 +44,7 @@ use crate::poly::{Commitment, Poly};
 use crate::secret::clear_fr;
 use crate::util::sha3_256;
 
-pub use blstrs::{
-    Bls12 as PEngine, G1Affine, G1Projective as G1, G2Affine, G2Projective as G2, Scalar as Fr,
-};
+pub use blstrs::{Bls12 as PEngine, G1Affine, G1Projective, G2Affine, G2Projective, Scalar as Fr};
 
 /// The size of a secret key's representation in bytes.
 pub const SK_SIZE: usize = 32;
@@ -62,17 +60,17 @@ pub const DST: &[u8; 43] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_";
 
 /// A public key.
 #[derive(Deserialize, Serialize, Copy, Clone, PartialEq, Eq)]
-pub struct PublicKey(#[serde(with = "serde_impl::projective")] G1);
+pub struct PublicKey(#[serde(with = "serde_impl::affine")] G1Affine);
 
 impl Hash for PublicKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.to_affine().to_compressed().as_ref().hash(state);
+        self.0.to_compressed().as_ref().hash(state);
     }
 }
 
 impl fmt::Debug for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let uncomp = self.0.to_affine().to_uncompressed();
+        let uncomp = self.0.to_uncompressed();
         write!(f, "PublicKey({:0.10})", HexFmt(uncomp))
     }
 }
@@ -85,58 +83,63 @@ impl PartialOrd for PublicKey {
 
 impl Ord for PublicKey {
     fn cmp(&self, other: &Self) -> Ordering {
-        cmp_projective(&self.0, &other.0)
-    }
-}
-
-/// Utility to convert blsttc to blst types
-impl From<PublicKey> for G1 {
-    fn from(item: PublicKey) -> Self {
-        item.0
-    }
-}
-
-/// Utility to convert blsttc to blst types
-impl From<G1> for PublicKey {
-    fn from(item: G1) -> Self {
-        PublicKey(item)
+        cmp_affine(&self.0, &other.0)
     }
 }
 
 /// Utility to convert blsttc to blst types
 impl From<PublicKey> for G1Affine {
     fn from(item: PublicKey) -> Self {
-        item.0.to_affine()
+        item.0
+    }
+}
+
+/// Utility to convert blsttc to blst types
+impl From<G1Affine> for PublicKey {
+    fn from(item: G1Affine) -> Self {
+        PublicKey(item)
+    }
+}
+
+/// Utility to convert blsttc to blst types
+impl From<PublicKey> for G1Projective {
+    fn from(item: PublicKey) -> Self {
+        item.0.into()
     }
 }
 
 /// Utility to convert blst to blsttc types
-impl From<G1Affine> for PublicKey {
-    fn from(item: G1Affine) -> Self {
+impl From<G1Projective> for PublicKey {
+    fn from(item: G1Projective) -> Self {
         PublicKey(item.into())
-    }
-}
-
-/// Utility to compare between blsttc and blst types
-impl std::cmp::PartialEq<G1> for PublicKey {
-    fn eq(&self, other: &G1) -> bool {
-        &self.0 == other
     }
 }
 
 /// Utility to compare between blsttc and blst types
 impl std::cmp::PartialEq<G1Affine> for PublicKey {
     fn eq(&self, other: &G1Affine) -> bool {
-        // TODO is there a way to avoid the to_affine() by doing some cheap op on other?
-        &self.0.to_affine() == other
+        &self.0 == other
+    }
+}
+
+/// Utility to compare between blsttc and blst types
+impl std::cmp::PartialEq<G1Projective> for PublicKey {
+    fn eq(&self, other: &G1Projective) -> bool {
+        &G1Projective::from(self.0) == other
     }
 }
 
 impl PublicKey {
+    // Utility to check if public key is 0, this is a measure to prevent rogue public key attacks
+    fn is_zero(&self) -> bool {
+        self.0.is_identity().unwrap_u8() == 1
+    }
+
     /// Returns `true` if the signature matches the element of `G2`.
     pub fn verify_g2<H: Into<G2Affine>>(&self, sig: &Signature, hash: H) -> bool {
-        PEngine::pairing(&self.0.to_affine(), &hash.into())
-            == PEngine::pairing(&G1Affine::generator(), &sig.0.to_affine())
+        !self.is_zero()
+            && PEngine::pairing(&self.0, &hash.into())
+                == PEngine::pairing(&G1Affine::generator(), &sig.0)
     }
 
     /// Returns `true` if the signature matches the message.
@@ -155,12 +158,12 @@ impl PublicKey {
     /// Encrypts the message.
     pub fn encrypt_with_rng<R: RngCore, M: AsRef<[u8]>>(&self, rng: &mut R, msg: M) -> Ciphertext {
         let r: Fr = Fr::random(rng);
-        let u = G1Affine::generator().mul(r);
+        let u = G1Affine::generator().mul(r).to_affine();
         let v: Vec<u8> = {
-            let g = self.0.to_affine().mul(r);
-            xor_with_hash(g, msg.as_ref())
+            let g = self.0.mul(r);
+            xor_with_hash(g.to_affine(), msg.as_ref())
         };
-        let w = hash_g1_g2(u, &v).to_affine().mul(r);
+        let w = hash_g1_g2(u, &v).mul(r).to_affine();
         Ciphertext(u, v, w)
     }
 
@@ -182,6 +185,18 @@ impl PublicKey {
     pub fn to_bytes(self) -> [u8; PK_SIZE] {
         self.0.to_compressed()
     }
+
+    /// Deserialize a hex-encoded representation of a `PublicKey` to a `PublicKey` instance.
+    pub fn from_hex(hex: &str) -> Result<Self> {
+        let pk_bytes = hex::decode(hex)?;
+        let pk_bytes: [u8; PK_SIZE] = pk_bytes.try_into().map_err(|_| Error::InvalidBytes)?;
+        Self::from_bytes(pk_bytes)
+    }
+
+    /// Serialize this `PublicKey` instance to a hex-encoded `String`.
+    pub fn to_hex(&self) -> String {
+        hex::encode(self.to_bytes())
+    }
 }
 
 /// A public key share.
@@ -190,7 +205,7 @@ pub struct PublicKeyShare(PublicKey);
 
 impl fmt::Debug for PublicKeyShare {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let uncomp = self.0 .0.to_affine().to_uncompressed();
+        let uncomp = self.0 .0.to_uncompressed();
         write!(f, "PublicKeyShare({:0.10})", HexFmt(uncomp))
     }
 }
@@ -210,8 +225,7 @@ impl PublicKeyShare {
     pub fn verify_decryption_share(&self, share: &DecryptionShare, ct: &Ciphertext) -> bool {
         let Ciphertext(ref u, ref v, ref w) = *ct;
         let hash = hash_g1_g2(*u, v);
-        PEngine::pairing(&share.0.to_affine(), &hash.to_affine())
-            == PEngine::pairing(&(self.0).0.to_affine(), &w.to_affine())
+        PEngine::pairing(&share.0, &hash) == PEngine::pairing(&(self.0).0, w)
     }
 
     /// Derives a child public key share for a given index.
@@ -233,7 +247,7 @@ impl PublicKeyShare {
 /// A signature.
 // Note: Random signatures can be generated for testing.
 #[derive(Deserialize, Serialize, Clone, PartialEq, Eq)]
-pub struct Signature(#[serde(with = "serde_impl::projective")] G2);
+pub struct Signature(#[serde(with = "serde_impl::affine")] G2Affine);
 
 impl PartialOrd for Signature {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -243,33 +257,33 @@ impl PartialOrd for Signature {
 
 impl Ord for Signature {
     fn cmp(&self, other: &Self) -> Ordering {
-        cmp_projective(&self.0, &other.0)
+        cmp_affine(&self.0, &other.0)
     }
 }
 
 impl Distribution<Signature> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Signature {
-        Signature(G2::random(rng))
+        Signature(G2Projective::random(rng).to_affine())
     }
 }
 
 impl fmt::Debug for Signature {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let uncomp = self.0.to_affine().to_uncompressed();
+        let uncomp = self.0.to_uncompressed();
         write!(f, "Signature({:0.10})", HexFmt(uncomp))
     }
 }
 
 impl Hash for Signature {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.to_affine().to_compressed().as_ref().hash(state);
+        self.0.to_compressed().hash(state);
     }
 }
 
 impl Signature {
     /// Returns `true` if the signature contains an odd number of ones.
     pub fn parity(&self) -> bool {
-        let uncomp = self.0.to_affine().to_uncompressed();
+        let uncomp = self.0.to_uncompressed();
         let xor_bytes: u8 = uncomp.as_ref().iter().fold(0, |result, byte| result ^ byte);
         0 != xor_bytes.count_ones() % 2
     }
@@ -299,7 +313,7 @@ impl Distribution<SignatureShare> for Standard {
 
 impl fmt::Debug for SignatureShare {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let uncomp = (self.0).0.to_affine().to_uncompressed();
+        let uncomp = (self.0).0.to_uncompressed();
         write!(f, "SignatureShare({:0.10})", HexFmt(uncomp))
     }
 }
@@ -324,7 +338,7 @@ impl SignatureShare {
 /// `SecretKey` implements `Deserialize` but not `Serialize` to avoid accidental
 /// serialization in insecure contexts. To enable both use the `::serde_impl::SerdeSecret`
 /// wrapper which implements both `Deserialize` and `Serialize`.
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct SecretKey(Fr);
 
 impl Zeroize for SecretKey {
@@ -406,12 +420,12 @@ impl SecretKey {
 
     /// Returns the matching public key.
     pub fn public_key(&self) -> PublicKey {
-        PublicKey(G1Affine::generator() * self.0)
+        PublicKey((G1Affine::generator() * self.0).to_affine())
     }
 
     /// Signs the given element of `G2`.
     pub fn sign_g2<H: Into<G2Affine>>(&self, hash: H) -> Signature {
-        Signature(hash.into().mul(self.0))
+        Signature(hash.into().mul(self.0).to_affine())
     }
 
     /// Signs the given message.
@@ -430,13 +444,25 @@ impl SecretKey {
         Ok(SecretKey::from_mut(&mut fr))
     }
 
+    /// Deserialize a hex-encoded representation of a `SecretKey` to a `SecretKey` instance.
+    pub fn from_hex(hex: &str) -> Result<Self> {
+        let sk_bytes = hex::decode(hex)?;
+        let sk_bytes: [u8; SK_SIZE] = sk_bytes.try_into().map_err(|_| Error::InvalidBytes)?;
+        Self::from_bytes(sk_bytes)
+    }
+
+    /// Serialize this `SecretKey` instance to a hex-encoded `String`.
+    pub fn to_hex(&self) -> String {
+        hex::encode(self.to_bytes())
+    }
+
     /// Returns the decrypted text, or `None`, if the ciphertext isn't valid.
     pub fn decrypt(&self, ct: &Ciphertext) -> Option<Vec<u8>> {
         if !ct.verify() {
             return None;
         }
         let Ciphertext(ref u, ref v, _) = *ct;
-        let g = u.to_affine().mul(self.0);
+        let g = u.mul(self.0).to_affine();
         Some(xor_with_hash(g, v))
     }
 
@@ -461,7 +487,7 @@ impl SecretKey {
 /// `SecretKeyShare` implements `Deserialize` but not `Serialize` to avoid accidental
 /// serialization in insecure contexts. To enable both use the `::serde_impl::SerdeSecret`
 /// wrapper which implements both `Deserialize` and `Serialize`.
-#[derive(Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct SecretKeyShare(SecretKey);
 
 /// Can be used to create a new random instance of `SecretKeyShare`. This is only useful for testing
@@ -515,7 +541,7 @@ impl SecretKeyShare {
 
     /// Returns a decryption share, without validating the ciphertext.
     pub fn decrypt_share_no_verify(&self, ct: &Ciphertext) -> DecryptionShare {
-        DecryptionShare(ct.0.to_affine() * (self.0).0)
+        DecryptionShare((ct.0 * (self.0).0).to_affine())
     }
 
     /// Generates a non-redacted debug string. This method differs from
@@ -544,17 +570,17 @@ impl SecretKeyShare {
 /// An encrypted message.
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct Ciphertext(
-    #[serde(with = "serde_impl::projective")] G1,
+    #[serde(with = "serde_impl::affine")] G1Affine,
     Vec<u8>,
-    #[serde(with = "serde_impl::projective")] G2,
+    #[serde(with = "serde_impl::affine")] G2Affine,
 );
 
 impl Hash for Ciphertext {
     fn hash<H: Hasher>(&self, state: &mut H) {
         let Ciphertext(ref u, ref v, ref w) = *self;
-        u.to_affine().to_compressed().as_ref().hash(state);
+        u.to_compressed().as_ref().hash(state);
         v.hash(state);
-        w.to_affine().to_compressed().as_ref().hash(state);
+        w.to_compressed().as_ref().hash(state);
     }
 }
 
@@ -568,9 +594,7 @@ impl Ord for Ciphertext {
     fn cmp(&self, other: &Self) -> Ordering {
         let Ciphertext(ref u0, ref v0, ref w0) = self;
         let Ciphertext(ref u1, ref v1, ref w1) = other;
-        cmp_projective(u0, u1)
-            .then(v0.cmp(v1))
-            .then(cmp_projective(w0, w1))
+        cmp_affine(u0, u1).then(v0.cmp(v1)).then(cmp_affine(w0, w1))
     }
 }
 
@@ -580,16 +604,15 @@ impl Ciphertext {
     pub fn verify(&self) -> bool {
         let Ciphertext(ref u, ref v, ref w) = *self;
         let hash = hash_g1_g2(*u, v);
-        PEngine::pairing(&G1Affine::generator(), &w.to_affine())
-            == PEngine::pairing(&u.to_affine(), &hash.to_affine())
+        PEngine::pairing(&G1Affine::generator(), w) == PEngine::pairing(u, &hash)
     }
 
     /// Returns byte representation of Ciphertext
     pub fn to_bytes(&self) -> Vec<u8> {
         let Ciphertext(ref u, ref v, ref w) = *self;
         let mut result: Vec<u8> = Default::default();
-        result.extend(u.to_affine().to_compressed().as_ref());
-        result.extend(w.to_affine().to_compressed().as_ref());
+        result.extend(u.to_compressed().as_ref());
+        result.extend(w.to_compressed().as_ref());
         result.extend(v);
         result
     }
@@ -608,7 +631,7 @@ impl Ciphertext {
         wbytes.copy_from_slice(&bytes[PK_SIZE..PK_SIZE + SIG_SIZE]);
         let w = g2_from_bytes(wbytes)?;
 
-        let v: Vec<u8> = (&bytes[PK_SIZE + SIG_SIZE..]).to_vec();
+        let v: Vec<u8> = (bytes[PK_SIZE + SIG_SIZE..]).to_vec();
 
         Ok(Self(u, v, w))
     }
@@ -616,17 +639,17 @@ impl Ciphertext {
 
 /// A decryption share. A threshold of decryption shares can be used to decrypt a message.
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct DecryptionShare(#[serde(with = "serde_impl::projective")] G1);
+pub struct DecryptionShare(#[serde(with = "serde_impl::affine")] G1Affine);
 
 impl Distribution<DecryptionShare> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> DecryptionShare {
-        DecryptionShare(G1::random(rng))
+        DecryptionShare(G1Projective::random(rng).to_affine())
     }
 }
 
 impl Hash for DecryptionShare {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.to_affine().to_compressed().as_ref().hash(state);
+        self.0.to_compressed().as_ref().hash(state);
     }
 }
 
@@ -739,8 +762,10 @@ impl PublicKeySet {
     {
         let samples = shares
             .into_iter()
-            .map(|(i, share)| (i, (share.borrow().0).0));
-        Ok(Signature(interpolate(self.commit.degree(), samples)?))
+            .map(|(i, share)| (i, G2Projective::from((share.borrow().0).0)));
+        Ok(Signature(
+            interpolate(self.commit.degree(), samples)?.to_affine(),
+        ))
     }
 
     /// Combines the shares to decrypt the ciphertext.
@@ -749,15 +774,17 @@ impl PublicKeySet {
         I: IntoIterator<Item = (T, &'a DecryptionShare)>,
         T: IntoFr,
     {
-        let samples = shares.into_iter().map(|(i, share)| (i, &share.0));
-        let g = interpolate(self.commit.degree(), samples)?;
+        let samples = shares
+            .into_iter()
+            .map(|(i, share)| (i, G1Projective::from(share.0)));
+        let g = interpolate(self.commit.degree(), samples)?.to_affine();
         Ok(xor_with_hash(g, &ct.1))
     }
 
     /// Derives a child public key set for a given index.
     pub fn derive_child(&self, index: &[u8]) -> Self {
         let index_fr = derivation_index_into_fr(index);
-        let child_coeffs: Vec<G1> = self
+        let child_coeffs: Vec<G1Affine> = self
             .commit
             .coeff
             .iter()
@@ -806,7 +833,7 @@ impl SecretKeySet {
     /// Panics if the `threshold` is too large for the coefficients to fit into a `Vec`.
     pub fn random<R: Rng>(threshold: usize, rng: &mut R) -> Self {
         SecretKeySet::try_random(threshold, rng)
-            .unwrap_or_else(|e| panic!("Failed to create random `SecretKeySet`: {}", e))
+            .unwrap_or_else(|e| panic!("Failed to create random `SecretKeySet`: {e}"))
     }
 
     /// Creates a set of secret key shares, where any `threshold + 1` of them can collaboratively
@@ -879,12 +906,12 @@ impl SecretKeySet {
 }
 
 /// Returns a hash of the given message in `G2`.
-pub fn hash_g2<M: AsRef<[u8]>>(msg: M) -> G2 {
-    G2::hash_to_curve(msg.as_ref(), DST, &[])
+pub fn hash_g2<M: AsRef<[u8]>>(msg: M) -> G2Affine {
+    G2Projective::hash_to_curve(msg.as_ref(), DST, &[]).to_affine()
 }
 
 /// Returns a hash of the group element and message, in the second group.
-fn hash_g1_g2<M: AsRef<[u8]>>(g1: G1, msg: M) -> G2 {
+fn hash_g1_g2<M: AsRef<[u8]>>(g1: G1Affine, msg: M) -> G2Affine {
     // If the message is large, hash it, otherwise copy it.
     // TODO: Benchmark and optimize the threshold.
     let mut msg = if msg.as_ref().len() > 64 {
@@ -892,13 +919,13 @@ fn hash_g1_g2<M: AsRef<[u8]>>(g1: G1, msg: M) -> G2 {
     } else {
         msg.as_ref().to_vec()
     };
-    msg.extend(g1.to_affine().to_compressed().as_ref());
+    msg.extend(g1.to_compressed().as_ref());
     hash_g2(&msg)
 }
 
 /// Returns the bitwise xor of `bytes` with a sequence of pseudorandom bytes determined by `g1`.
-fn xor_with_hash(g1: G1, bytes: &[u8]) -> Vec<u8> {
-    let digest = sha3_256(g1.to_affine().to_compressed().as_ref());
+fn xor_with_hash(g1: G1Affine, bytes: &[u8]) -> Vec<u8> {
+    let digest = sha3_256(&g1.to_compressed());
     let rng = ChaChaRng::from_seed(digest);
     let xor = |(a, b): (u8, &u8)| a ^ b;
     rng.sample_iter(&Standard).zip(bytes).map(xor).collect()
@@ -919,7 +946,10 @@ where
         .map(|(i, sample)| (into_fr_plus_1(i), sample))
         .collect();
     if samples.len() <= t {
-        return Err(Error::NotEnoughShares);
+        return Err(Error::NotEnoughShares {
+            current: samples.len(),
+            required: t + 1,
+        });
     }
 
     if t == 0 {
@@ -990,16 +1020,16 @@ mod tests {
     fn test_interpolate() {
         let mut rng = rand::thread_rng();
         for deg in 0..5 {
-            println!("deg = {}", deg);
+            println!("deg = {deg}");
             let comm = Poly::random(deg, &mut rng).commitment();
             let mut values = Vec::new();
             let mut x = 0;
             for _ in 0..=deg {
                 x += rng.gen_range(1..5);
-                values.push((x - 1, comm.evaluate(x)));
+                values.push((x - 1, G1Projective::from(comm.evaluate(x))));
             }
             let actual = interpolate(deg, values).expect("wrong number of values");
-            assert_eq!(comm.evaluate(0), actual);
+            assert_eq!(comm.evaluate(0), actual.to_affine());
         }
     }
 
@@ -1149,22 +1179,22 @@ mod tests {
 
         assert_eq!(hash_g2(&msg), hash_g2(&msg));
         assert_ne!(hash_g2(&msg), hash_g2(&msg_end0));
-        assert_ne!(hash_g2(&msg_end0), hash_g2(&msg_end1));
+        assert_ne!(hash_g2(&msg_end0), hash_g2(msg_end1));
     }
 
     /// Some basic sanity checks for the `hash_g1_g2` function.
     #[test]
     fn test_hash_g1_g2() {
         let mut rng = rand::thread_rng();
-        let g0 = G1::random(&mut rng);
-        let g1 = G1::random(&mut rng);
+        let g0 = G1Projective::random(&mut rng).to_affine();
+        let g1 = G1Projective::random(&mut rng).to_affine();
         let msg: Vec<u8> = rng.sample_iter(&Standard).take(1000).collect();
         let msg_end0: Vec<u8> = msg.iter().chain(b"end0").cloned().collect();
         let msg_end1: Vec<u8> = msg.iter().chain(b"end1").cloned().collect();
 
         assert_eq!(hash_g1_g2(g0, &msg), hash_g1_g2(g0, &msg));
         assert_ne!(hash_g1_g2(g0, &msg), hash_g1_g2(g0, &msg_end0));
-        assert_ne!(hash_g1_g2(g0, &msg_end0), hash_g1_g2(g0, &msg_end1));
+        assert_ne!(hash_g1_g2(g0, &msg_end0), hash_g1_g2(g0, msg_end1));
         assert_ne!(hash_g1_g2(g0, &msg), hash_g1_g2(g1, &msg));
     }
 
@@ -1172,8 +1202,8 @@ mod tests {
     #[test]
     fn test_xor_with_hash() {
         let mut rng = rand::thread_rng();
-        let g0 = G1::random(&mut rng);
-        let g1 = G1::random(&mut rng);
+        let g0 = G1Projective::random(&mut rng).to_affine();
+        let g1 = G1Projective::random(&mut rng).to_affine();
         let xwh = xor_with_hash;
         assert_eq!(xwh(g0, &[0; 5]), xwh(g0, &[0; 5]));
         assert_ne!(xwh(g0, &[0; 5]), xwh(g1, &[0; 5]));
@@ -1195,6 +1225,22 @@ mod tests {
         let cipher2 =
             Ciphertext::from_bytes(&cipher.to_bytes()).expect("invalid cipher representation");
         assert_eq!(cipher, cipher2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_to_hex() -> Result<()> {
+        let sk_hex = "4a353be3dac091a0a7e640620372f5e1e2e4401717c1e79cac6ffba8f6905604";
+        let sk = SecretKey::from_hex(sk_hex)?;
+        let sk2_hex = sk.to_hex();
+        let sk2 = SecretKey::from_hex(&sk2_hex)?;
+        assert_eq!(sk, sk2);
+        let pk_hex = "85695fcbc06cc4c4c9451f4dce21cbf8de3e5a13bf48f44cdbb18e203\
+                      8ba7b8bb1632d7911ef1e2e08749bddbf165352";
+        let pk = PublicKey::from_hex(pk_hex)?;
+        let pk2_hex = pk.to_hex();
+        let pk2 = PublicKey::from_hex(&pk2_hex)?;
+        assert_eq!(pk, pk2);
         Ok(())
     }
 
@@ -1267,7 +1313,7 @@ mod tests {
         // secret key gives same public key
         assert_eq!(pkbytes, pk.to_bytes());
         // signature matches test vector
-        let sig = sk.sign(&msgbytes);
+        let sig = sk.sign(msgbytes);
         assert_eq!(sigbytes, sig.to_bytes());
         // signature can be verified
         assert!(pk.verify(&sig, msgbytes));
@@ -1835,7 +1881,7 @@ mod tests {
         let msg = "Totally real news";
         let mut child_sig_shares = BTreeMap::default();
         for (i, child_key_share) in child_key_shares.iter() {
-            let child_sig_share = child_key_share.sign(&msg);
+            let child_sig_share = child_key_share.sign(msg);
             child_sig_shares.insert(i, child_sig_share);
         }
         // Combining the child shares creates a valid signature for the child
@@ -1847,5 +1893,33 @@ mod tests {
         assert!(pks_child.public_key().verify(&sig, msg));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_zero_pubkey_attack() {
+        let sk = SecretKey::random();
+        let pk = sk.public_key();
+
+        // Make sure the public key is not zero
+        assert!(!pk.is_zero());
+
+        // Rogue 0 pubkey
+        let rogue_public_key = PublicKey(G1Affine::identity());
+        assert!(rogue_public_key.is_zero());
+
+        // Rogue 0 sig
+        let rogue_sig = Signature(G2Affine::identity());
+
+        // just any hash will do
+        let hash = hash_g2(b"anything");
+
+        // check that the attack works without the 0 check
+        assert_eq!(
+            PEngine::pairing(&rogue_public_key.0, &hash),
+            PEngine::pairing(&G1Affine::generator(), &rogue_sig.0)
+        );
+
+        // check that verify_g2 is protected against this attack
+        assert!(!rogue_public_key.verify_g2(&rogue_sig, hash));
     }
 }

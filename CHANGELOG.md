@@ -2,6 +2,81 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [8.0.2](https://github.com/maidsafe/blsttc/compare/v8.0.1...v8.0.2) (2023-02-09)
+
+
+### Bug Fixes
+
+* fixing clippy issues ([ca691ab](https://github.com/maidsafe/blsttc/commit/ca691ab036205ed4011969ad525ace14a4389b10))
+* fixing fmt issues ([9a84f33](https://github.com/maidsafe/blsttc/commit/9a84f337b87615776c3758e3dd3c00771a141e09))
+* **SecretKey:** adding PartilaOrd and Ord attributes for the SecretKey ([0e72eee](https://github.com/maidsafe/blsttc/commit/0e72eee2f45b9b68a23dcb963b391e79bf2c3ade))
+
+### [8.0.1](https://github.com/maidsafe/blsttc/compare/v8.0.0...v8.0.1) (2022-11-17)
+
+## [8.0.0](https://github.com/maidsafe/blsttc/compare/v7.1.0...v8.0.0) (2022-11-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **repr:** switch internal representation to Affine
+
+### Features
+
+* **repr:** switch internal representation to Affine ([f52d1f0](https://github.com/maidsafe/blsttc/commit/f52d1f06a070daace955c6685762e31242e183fc))
+
+
+### Bug Fixes
+
+* **repr:** don't alias G{1,2}Affine with G1 G2 ([9dffa7c](https://github.com/maidsafe/blsttc/commit/9dffa7cd45d85a8eb3dd65b39a28bfe82bfe31fa))
+
+## [7.1.0](https://github.com/maidsafe/blsttc/compare/v7.0.0...v7.1.0) (2022-10-24)
+
+
+### Features
+
+* check pubkey for 0 to prevent rogue key attack variant ([108c02c](https://github.com/maidsafe/blsttc/commit/108c02cdb8aef93172030b740c8d8af521deb17b))
+* test that reproduces the attack ([98876fc](https://github.com/maidsafe/blsttc/commit/98876fc3926961ab1d664c5dbcbfce48542f0bfb))
+
+## [7.0.0](https://github.com/maidsafe/blsttc/compare/v6.2.0...v7.0.0) (2022-07-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* provide context information within Error::NotEnoughShares type
+
+### Features
+
+* provide context information within Error::NotEnoughShares type ([b95d347](https://github.com/maidsafe/blsttc/commit/b95d34764301e08b1fe855d7c600327cb083b08d))
+
+## [6.2.0](https://github.com/maidsafe/blsttc/compare/v6.1.0...v6.2.0) (2022-07-05)
+
+
+### Features
+
+* remove getrandom feature list for wasm ([2f2b021](https://github.com/maidsafe/blsttc/commit/2f2b021a8fe885537a4d83b47d088c7342d16254))
+
+## [6.1.0](https://github.com/maidsafe/blsttc/compare/v6.0.0...v6.1.0) (2022-06-24)
+
+
+### Features
+
+* simple example for generating a keypair ([c3cf652](https://github.com/maidsafe/blsttc/commit/c3cf65207561c4021ced8d179e5e56bd619da43c))
+
+## [6.0.0](https://github.com/maidsafe/blsttc/compare/v5.2.0...v6.0.0) (2022-06-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* the `Eq`, `Serialize` and `Deserialize` derivations are removed from the error type
+because the derived hex error doesn't implement these.
+
+I'm finding myself repeating this code several times in places where I'm using the BLS library, so I
+thought it would be useful to just have it directly on these types.
+
+### Features
+
+* provide hex conversion utilities ([2509f30](https://github.com/maidsafe/blsttc/commit/2509f30c942115b8dbcd1e0ab9f82a0b835f4437))
+
 ## [5.2.0](https://github.com/maidsafe/blsttc/compare/v5.1.3...v5.2.0) (2022-04-05)
 
 
